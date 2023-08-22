@@ -1,8 +1,25 @@
+import jax
+import jax.lax as lax
+from flax import linen as nn
+import matplotlib.pyplot as plt
+from jax import random
 import numpy as np
+import flax
+import optax
+import ruptures as rpt
+import jax.numpy as jnp
+from jax import grad, jit
+import pandas as pd
 from typing import Tuple
+import copy
 from jax import jit, lax
 from jax import numpy as jnp
+from jax.ops import segment_sum
 from jax.tree_util import Partial
+from jax import grad, jit, vmap, value_and_grad
+import sys
+import time
+
 
 def find_closest_index(sorted_list: list[float], target_value: float) -> int:
     """
@@ -49,7 +66,6 @@ def find_closest_index(sorted_list: list[float], target_value: float) -> int:
 def prepend_row_of_zeros(array2d: jnp.ndarray) -> jnp.ndarray:
     """Return the 2D array with a row of 0s at the beginning."""
     return jnp.pad(array=array2d, pad_width=((1, 0), (0, 0)))
-
 
 
 def find_last_top_k_changes(
@@ -140,8 +156,6 @@ def get_path_arr(
     )
 
     return path_arr, rank_arr, soc_arr[n_samples]
-
-
 
 
 
@@ -327,3 +341,114 @@ def segmentation_to_projection(signal: jnp.ndarray, segment_ids: jnp.ndarray) ->
     projection = projection_pwc(signal, segment_ids)
     
     return projection
+
+
+def get_strided_segmentations(segmentations: list[list[int]], signal_length: int, stride: int = 1) -> jnp.ndarray:
+    '''
+    Transforms multiple segmentations by striding, producing an array of segmented time steps.
+
+    Parameters:
+    segmentations (list[list[int]]): A list of segmentations, each represented as a list of time steps.
+    signal_length (int): The length of the signal.
+    stride (int, optional): The stride value for striding the segmentations. Default is 1.
+
+    Returns:
+    jnp.ndarray: An array containing the strided segmentations, each represented as a jnp array.
+    '''
+
+    strided_segmentations = []
+
+    # Loop through each segmentation and apply striding
+    for segmentation in segmentations:
+        # Apply stride to each element in the segmentation and convert to jnp array
+        strided_segment = get_segment_ids(jnp.array([int(element / stride) for element in segmentation]), signal_length)
+        strided_segmentations.append(strided_segment)
+    
+    # Stack the strided segmentations into a single jnp array
+    strided_segmentations_array = jnp.stack(strided_segmentations)
+    return strided_segmentations_array
+
+
+
+def find_change_indices(array: jnp.ndarray) -> jnp.ndarray:
+    '''
+    Finds indices where an array changes its values.
+
+    Parameters:
+    array (jnp.ndarray): The input array.
+
+    Returns:
+    jnp.ndarray: An array containing indices where the input array changes its values.
+    '''
+
+    # Find indices where array changes its values
+    change_indices = jnp.where(array[1:] != array[:-1])[0] + 1
+    
+    # Append the last index to account for the last change
+    change_indices = jnp.append(change_indices, len(array))
+
+    return change_indices
+
+
+def compute_snr(signal: np.ndarray, noise: np.ndarray) -> float:
+    '''
+    Computes the Signal-to-Noise Ratio (SNR) between a signal and noise.
+
+    Parameters:
+    signal (np.ndarray): The signal.
+    noise (np.ndarray): The noise.
+
+    Returns:
+    float: The Signal-to-Noise Ratio (SNR) in decibels (dB).
+    '''
+
+    # Calculate the power of the signal and noise
+    signal_power = np.mean(signal**2)
+    noise_power = np.mean(noise**2)
+    
+    # Calculate the Signal-to-Noise Ratio (SNR) in decibels (dB)
+    snr = 10 * np.log10(signal_power / noise_power)
+    
+    return snr
+
+
+def generate_signals(n_informative_dimensions: int, length: int, n_dimensions: int, n_bkps: int, sigma: float):
+    '''
+    Generates synthetic signals with informative and noisy dimensions.
+
+    Parameters:
+    n_informative_dimensions (int): Number of informative dimensions in the signal.
+    length (int): Length of the generated signal.
+    n_dimensions (int): Total number of dimensions in the generated signal.
+    n_bkps (int): Number of breakpoints where in the signal along informatives dimensions.
+    sigma (float): Standard deviation of the noise to be added.
+
+    Returns:
+    tuple: A tuple containing:
+        - noisy_signal (np.ndarray): The generated noisy signal with informative and noisy dimensions.
+        - segmentation (np.ndarray): The segmentation points.
+        - snr (float): Signal-to-Noise Ratio (SNR) of the generated signal.
+    '''
+
+    # Generate informative and noisy segments separately
+    signal, segmentation = rpt.pw_constant(length, n_informative_dimensions, n_bkps, noise_std=0)
+    noisy_signal, _ = rpt.pw_constant(length, n_dimensions - n_informative_dimensions, 0, noise_std=0)
+
+    # Combine the informative and noisy segments into the final signal
+    final_signal = np.zeros((length, n_dimensions))
+    final_signal[:, 0:n_informative_dimensions] = signal
+    final_signal[:, n_informative_dimensions:n_dimensions] = noisy_signal
+
+    # Normalize the signal to have zero mean and unit variance
+    normalized_signal = (final_signal - np.mean(final_signal)) / np.std(final_signal)
+    
+    # Generate noise with the specified standard deviation
+    noise = np.random.normal(0, sigma, normalized_signal.shape)
+    
+    # Add the noise to the normalized signal to create the noisy signal
+    noisy_signal = normalized_signal + noise
+    
+    # Calculate the Signal-to-Noise Ratio (SNR) of the generated signal
+    snr = compute_snr(normalized_signal, noise)  # Assuming compute_snr function is defined
+    
+    return noisy_signal, segmentation, snr
