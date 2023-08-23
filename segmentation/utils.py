@@ -19,7 +19,7 @@ from jax.tree_util import Partial
 from jax import grad, jit, vmap, value_and_grad
 import sys
 import time
-
+from typing import Dict, List, Generator
 
 def find_closest_index(sorted_list: list[float], target_value: float) -> int:
     """
@@ -452,3 +452,43 @@ def generate_signals(n_informative_dimensions: int, length: int, n_dimensions: i
     snr = compute_snr(normalized_signal, noise)  # Assuming compute_snr function is defined
     
     return noisy_signal, segmentation, snr
+
+
+
+def create_data_loader( signals: jnp.ndarray, segmentations: jnp.ndarray,
+                    batch_size: int, test_batch_idx: List[int]) -> Generator[Tuple[str, Tuple[jnp.ndarray, jnp.ndarray]], None, None]:
+    """
+    Creates a data loader for batched training data.
+
+    Parameters:
+    signals (jnp.ndarray): Array of signals.
+    segmentations (jnp.ndarray): Array of segmentations.
+    batch_size (int): Batch size for training.
+    test_batch_idx (List[int]): List of batch indices to be used for testing.
+
+    Yields:
+    Tuple[str, Tuple[jnp.ndarray, jnp.ndarray]]: Batch type ("Train" or "Test") and data-target tuple.
+    """
+    num_samples = signals.shape[0]
+    num_batches = num_samples // batch_size
+
+    # Determine the start and end indices for each batch
+    indices = jnp.arange(num_samples)
+
+    # Split the indices into batches
+    batch_indices = jnp.array_split(indices, num_batches)
+
+    for batch_idx in range(num_batches):
+        # Get the indices for the current batch
+        batch_indices_curr = batch_indices[batch_idx]
+
+        # Extract the signals and segmentations for the current batch
+        data = signals[batch_indices_curr]
+        target = segmentations[batch_indices_curr]
+
+        if batch_idx in test_batch_idx:
+            # Yield the test batch
+            yield "Test", (data, target)
+        else:
+            # Yield the training batch
+            yield "Train", (data, target)
